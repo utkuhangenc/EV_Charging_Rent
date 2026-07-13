@@ -1,0 +1,278 @@
+---
+title: "02 — EV-Charging Siting Models"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(caret)
+library(car)
+library(sandwich)
+library(lmtest)
+library(pROC)
+library(randomForest)
+library(readr)
+
+set.seed(2)
+
+panel_df <- read_csv(
+  here("data", "processed", "analysis_panel_2017_2023.csv"),
+  show_col_types = FALSE
+)
+
+outcome <- "WithinBuffer_1mi"
+
+predictors <- c(
+  "TotalPopulation", "PopDens", "Walkability",
+  "black_per", "hispanic_per", "asian_per",
+  "renter_per", "MedianRent", "MedianHouseholdIncome",
+  "EmployeeDiversity", "DistanceTransit",
+  "hs_per", "bachelor_per", "master_per"
+)
+
+model_data <- panel_df |>
+  select(Year, all_of(outcome), all_of(predictors)) |>
+  rename(WithinBuffer = all_of(outcome)) |>
+  mutate(WithinBuffer = as.integer(WithinBuffer)) |>
+  drop_na()
+```
+
+## Shared helpers
+
+```{r helpers}
+stratified_split <- function(data, proportion = 0.80, seed = 2) {
+  set.seed(seed)
+  index <- caret::createDataPartition(
+    data$WithinBuffer,
+    p = proportion,
+    list = FALSE
+  )
+  list(
+    train = data[index, , drop = FALSE],
+    test = data[-index, , drop = FALSE]
+  )
+}
+
+safe_binary_metrics <- function(actual, predicted, probabilities) {
+  actual <- factor(actual, levels = c(0, 1))
+  predicted <- factor(predicted, levels = c(0, 1))
+
+  cm <- table(Predicted = predicted, Actual = actual)
+
+  tn <- cm["0", "0"]
+  fn <- cm["0", "1"]
+  fp <- cm["1", "0"]
+  tp <- cm["1", "1"]
+
+  tibble(
+    accuracy = (tp + tn) / sum(cm),
+    sensitivity = ifelse(tp + fn > 0, tp / (tp + fn), NA_real_),
+    false_positive_rate = ifelse(fp + tn > 0, fp / (fp + tn), NA_real_),
+    precision = ifelse(tp + fp > 0, tp / (tp + fp), NA_real_),
+    auc = as.numeric(pROC::auc(actual, probabilities))
+  )
+}
+
+formula_siting <- reformulate(predictors, response = "WithinBuffer")
+```
+
+## Modified Poisson models with robust standard errors
+
+```{r modified-poisson}
+run_modified_poisson <- function(data, year) {
+  annual <- filter(data, Year == year)
+  split <- stratified_split(annual)
+
+  model <- glm(
+    formula_siting,
+    family = poisson(link = "log"),
+    data = split$train
+  )
+
+  robust_table <- lmtest::coeftest(
+    model,
+    vcov. = sandwich::vcovHC(model, type = "HC1")
+  )
+
+  probabilities <- predict(
+    model,
+    newdata = split$test,
+    type = "response"
+  )
+
+  roc_object <- pROC::roc(
+    split$test$WithinBuffer,
+    probabilities,
+    quiet = TRUE
+  )
+
+  threshold <- as.numeric(
+    pROC::coords(
+      roc_object,
+      "best",
+      ret = "threshold",
+      best.method = "youden"
+    )
+  )
+
+  predictions <- as.integer(probabilities >= threshold)
+
+  coefficients <- tibble(
+    Year = year,
+    term = rownames(robust_table),
+    estimate = robust_table[, 1],
+    robust_se = robust_table[, 2],
+    statistic = robust_table[, 3],
+    p_value = robust_table[, 4]
+  )
+
+  metrics <- safe_binary_metrics(
+    split$test$WithinBuffer,
+    predictions,
+    probabilities
+  ) |>
+    mutate(
+      Year = year,
+      model = "Modified Poisson",
+      threshold = threshold
+    )
+
+  list(model = model, coefficients = coefficients, metrics = metrics)
+}
+
+poisson_results <- map(2017:2023, ~ run_modified_poisson(model_data, .x))
+
+poisson_coefficients <- map_dfr(poisson_results, "coefficients")
+poisson_performance <- map_dfr(poisson_results, "metrics")
+
+write_csv(
+  poisson_coefficients,
+  here("results", "tables", "modified_poisson_coefficients.csv")
+)
+write_csv(
+  poisson_performance,
+  here("results", "tables", "modified_poisson_performance.csv")
+)
+```
+
+## Random-forest models
+
+```{r random-forest}
+run_random_forest <- function(data, year) {
+  annual <- filter(data, Year == year)
+  split <- stratified_split(annual, seed = 42)
+
+  train <- split$train |>
+    mutate(
+      WithinBuffer = factor(
+        WithinBuffer,
+        levels = c(1, 0),
+        labels = c("Yes", "No")
+      )
+    )
+
+  test <- split$test |>
+    mutate(
+      WithinBuffer = factor(
+        WithinBuffer,
+        levels = c(1, 0),
+        labels = c("Yes", "No")
+      )
+    )
+
+  control <- trainControl(
+    method = "cv",
+    number = 10,
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary,
+    savePredictions = "final"
+  )
+
+  number_predictors <- length(predictors)
+  tuning_grid <- data.frame(
+    mtry = unique(
+      pmax(
+        1,
+        round(seq(2, sqrt(number_predictors) * 1.5, length.out = 6))
+      )
+    )
+  )
+
+  set.seed(42)
+  model <- train(
+    formula_siting,
+    data = train,
+    method = "rf",
+    trControl = control,
+    metric = "ROC",
+    tuneGrid = tuning_grid,
+    importance = TRUE,
+    na.action = na.omit
+  )
+
+  probabilities <- predict(model, newdata = test, type = "prob")[, "Yes"]
+  predictions <- predict(model, newdata = test)
+
+  actual_numeric <- ifelse(test$WithinBuffer == "Yes", 1L, 0L)
+  predicted_numeric <- ifelse(predictions == "Yes", 1L, 0L)
+
+  importance_matrix <- randomForest::importance(
+    model$finalModel,
+    type = 1
+  )
+
+  importance_table <- tibble(
+    Year = year,
+    variable = rownames(importance_matrix),
+    importance = importance_matrix[, 1]
+  ) |>
+    arrange(desc(importance))
+
+  metrics <- safe_binary_metrics(
+    actual_numeric,
+    predicted_numeric,
+    probabilities
+  ) |>
+    mutate(
+      Year = year,
+      model = "Random Forest",
+      best_mtry = model$bestTune$mtry
+    )
+
+  list(model = model, importance = importance_table, metrics = metrics)
+}
+
+rf_results <- map(2017:2023, ~ run_random_forest(model_data, .x))
+
+rf_importance <- map_dfr(rf_results, "importance")
+rf_performance <- map_dfr(rf_results, "metrics")
+
+write_csv(
+  rf_importance,
+  here("results", "tables", "random_forest_importance.csv")
+)
+write_csv(
+  rf_performance,
+  here("results", "tables", "random_forest_performance.csv")
+)
+```
+
+## Combined performance table
+
+```{r combined-performance}
+model_performance <- bind_rows(
+  poisson_performance,
+  rf_performance
+) |>
+  arrange(Year, model)
+
+write_csv(
+  model_performance,
+  here("results", "tables", "siting_model_performance.csv")
+)
+
+model_performance
+```

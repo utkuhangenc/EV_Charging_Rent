@@ -1,0 +1,36 @@
+---
+title: "00 — Project Setup"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+required_packages <- c(
+  "here", "sf", "dplyr", "tidyr", "purrr", "readr", "stringr",
+  "ggplot2", "caret", "sandwich", "lmtest", "car", "pROC",
+  "randomForest", "plm", "tibble", "forcats"
+)
+
+missing_packages <- required_packages[
+  !required_packages %in% rownames(installed.packages())
+]
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+dir.create(here::here("data", "processed"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here::here("results", "tables"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here::here("results", "figures"), recursive = TRUE, showWarnings = FALSE)
+
+years <- 2017:2023
+distance_tags <- c("0_5mi", "1mi", "2mi")
+analysis_crs <- 5070
+```
+
+## Reproducibility information
+
+```{r session-info}
+sessionInfo()
+```

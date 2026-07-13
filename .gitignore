@@ -1,0 +1,25 @@
+# RStudio
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Rendered R Markdown files
+code/*.html
+code/*_files/
+code/*_cache/
+
+# renv local packages
+renv/library/
+renv/staging/
+
+# Large raw data
+data/raw/smart_location/
+data/raw/census_boundaries/
+
+# Optional: ignore all raw data
+# data/raw/
+
+# System files
+.DS_Store
+Thumbs.db

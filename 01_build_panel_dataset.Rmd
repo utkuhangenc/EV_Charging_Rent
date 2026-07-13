@@ -1,0 +1,764 @@
+---
+title: "01 — Build the 2017–2023 Analysis Panel"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+here::i_am("code/01_build_panel_dataset.Rmd")
+
+library(here)
+library(sf)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+library(stringr)
+
+years <- 2017:2023
+analysis_crs <- 5070
+
+acs_dir <- here("data", "raw", "acs")
+ev_dir <- here("data", "raw", "ev_stations")
+rent_dir <- here("data", "raw", "acs_rent_burden")
+
+shape_2010_dir <- here(
+  "data", "raw", "census_boundaries", "2010"
+)
+
+shape_2020_file <- here(
+  "data", "raw", "census_boundaries", "2020", "block_groups.shp"
+)
+
+smart_location_gdb <- here(
+  "data", "raw", "smart_location", "SmartLocationDatabase.gdb"
+)
+
+output_file <- here(
+  "data", "processed", "analysis_panel_2017_2023.csv"
+)
+
+dir.create(
+  dirname(output_file),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+```
+
+## Helper functions
+
+```{r helpers}
+to_numeric_clean <- function(x) {
+  x <- dplyr::na_if(as.character(x), "-")
+  x <- gsub("[^0-9.-]", "", x)
+  suppressWarnings(as.numeric(x))
+}
+
+add_acs_prefix <- function(x) {
+  x <- as.character(x)
+
+  ifelse(
+    stringr::str_starts(x, "1500000US"),
+    x,
+    paste0("1500000US", x)
+  )
+}
+
+assert_files_exist <- function(paths) {
+  missing <- paths[!file.exists(paths)]
+
+  if (length(missing) > 0) {
+    stop(
+      "The following required files are missing:\n",
+      paste(missing, collapse = "\n")
+    )
+  }
+}
+
+read_rent_burden_year <- function(year) {
+  path <- file.path(
+    rent_dir,
+    sprintf("ACSDT5Y%d.B25070-Data.csv", year)
+  )
+
+  assert_files_exist(path)
+
+  readr::read_csv(path, show_col_types = FALSE) |>
+    dplyr::filter(GEO_ID != "Geography") |>
+    dplyr::transmute(
+      GEO_ID = as.character(GEO_ID),
+      Year = year,
+      renters_total = to_numeric_clean(B25070_001E),
+      n_30_34 = to_numeric_clean(B25070_007E),
+      n_35_39 = to_numeric_clean(B25070_008E),
+      n_40_49 = to_numeric_clean(B25070_009E),
+      n_50p = to_numeric_clean(B25070_010E)
+    ) |>
+    dplyr::mutate(
+      burdened30_n = rowSums(
+        dplyr::across(c(n_30_34, n_35_39, n_40_49, n_50p)),
+        na.rm = FALSE
+      ),
+      burdened50_n = n_50p,
+      rent_burden_30p = dplyr::if_else(
+        renters_total > 0,
+        100 * burdened30_n / renters_total,
+        NA_real_
+      ),
+      rent_burden_50p = dplyr::if_else(
+        renters_total > 0,
+        100 * burdened50_n / renters_total,
+        NA_real_
+      )
+    ) |>
+    dplyr::select(
+      GEO_ID,
+      Year,
+      renters_total,
+      burdened30_n,
+      burdened50_n,
+      rent_burden_30p,
+      rent_burden_50p
+    )
+}
+
+calculate_ev_exposure <- function(
+    polygons,
+    points,
+    distances_miles = c(0.5, 1, 2),
+    projected_crs = analysis_crs) {
+
+  stopifnot(inherits(polygons, "sf"))
+  stopifnot(inherits(points, "sf"))
+
+  polygons_projected <- sf::st_transform(
+    polygons,
+    projected_crs
+  )
+
+  points_projected <- sf::st_transform(
+    points,
+    projected_crs
+  )
+
+  output <- polygons
+
+  for (distance in distances_miles) {
+    distance_meters <- distance * 1609.344
+
+    station_buffers <- sf::st_buffer(
+      points_projected,
+      dist = distance_meters
+    )
+
+    intersections <- sf::st_intersects(
+      sf::st_geometry(polygons_projected),
+      sf::st_geometry(station_buffers)
+    )
+
+    suffix <- stringr::str_replace(
+      as.character(distance),
+      "\\.",
+      "_"
+    )
+
+    output[[paste0("WithinBuffer_", suffix, "mi")]] <-
+      as.integer(lengths(intersections) > 0)
+
+    output[[paste0("PointCount_", suffix, "mi")]] <-
+      lengths(intersections)
+  }
+
+  output
+}
+```
+
+## Read Census boundaries and create the 2010–2020 crosswalk
+
+```{r geography-crosswalk}
+shape_2010_files <- list.files(
+  shape_2010_dir,
+  pattern = "\\.shp$",
+  full.names = TRUE,
+  ignore.case = TRUE
+)
+
+if (length(shape_2010_files) == 0) {
+  stop(
+    "No 2010 block-group shapefiles were found in:\n",
+    shape_2010_dir
+  )
+}
+
+assert_files_exist(shape_2020_file)
+
+block_groups_2010 <- shape_2010_files |>
+  purrr::map(
+    ~ sf::st_read(.x, quiet = TRUE)
+  ) |>
+  dplyr::bind_rows()
+
+if (!"GEOID" %in% names(block_groups_2010)) {
+  stop("The 2010 block-group files do not contain a GEOID column.")
+}
+
+block_groups_2010 <- block_groups_2010 |>
+  dplyr::mutate(
+    GEOID10 = add_acs_prefix(GEOID)
+  )
+
+block_groups_2020 <- sf::st_read(
+  shape_2020_file,
+  quiet = TRUE
+)
+
+if (!"GEOID" %in% names(block_groups_2020)) {
+  stop("The 2020 block-group file does not contain a GEOID column.")
+}
+
+block_groups_2020 <- block_groups_2020 |>
+  dplyr::mutate(
+    GEOID = add_acs_prefix(GEOID)
+  )
+
+smart_layers <- sf::st_layers(smart_location_gdb)
+smart_layer_name <- smart_layers$name[[1]]
+
+smart_location <- sf::st_read(
+  smart_location_gdb,
+  layer = smart_layer_name,
+  quiet = TRUE
+)
+
+required_smart_columns <- c(
+  "GEOID10",
+  "STATEFP",
+  "D1B",
+  "D2A_EPHHM",
+  "D4A",
+  "NatWalkInd"
+)
+
+missing_smart_columns <- setdiff(
+  required_smart_columns,
+  names(smart_location)
+)
+
+if (length(missing_smart_columns) > 0) {
+  stop(
+    "The Smart Location layer is missing these columns: ",
+    paste(missing_smart_columns, collapse = ", ")
+  )
+}
+
+smart_location <- smart_location |>
+  dplyr::mutate(
+    GEOID10 = add_acs_prefix(GEOID10),
+    STATEFP = stringr::str_pad(
+      as.character(STATEFP),
+      width = 2,
+      side = "left",
+      pad = "0"
+    ),
+    D1B = to_numeric_clean(D1B),
+    D2A_EPHHM = to_numeric_clean(D2A_EPHHM),
+    D4A = to_numeric_clean(D4A),
+    NatWalkInd = to_numeric_clean(NatWalkInd)
+  ) |>
+  dplyr::filter(
+    GEOID10 %in% block_groups_2010$GEOID10,
+    STATEFP %in% c("11", "24", "42", "51")
+  )
+
+smart_5070 <- smart_location |>
+  sf::st_make_valid() |>
+  sf::st_transform(analysis_crs)
+
+block_groups_2020_5070 <- block_groups_2020 |>
+  sf::st_make_valid() |>
+  sf::st_transform(analysis_crs)
+
+intersection_areas <- suppressWarnings(
+  sf::st_intersection(
+    smart_5070 |>
+      dplyr::select(
+        GEOID10,
+        D1B,
+        D2A_EPHHM,
+        D4A,
+        NatWalkInd
+      ),
+    block_groups_2020_5070 |>
+      dplyr::select(GEOID)
+  )
+)
+
+intersection_areas$overlap_area <- as.numeric(
+  sf::st_area(intersection_areas)
+)
+
+intersection_table <- intersection_areas |>
+  sf::st_drop_geometry() |>
+  dplyr::filter(
+    !is.na(GEOID10),
+    !is.na(GEOID),
+    overlap_area > 0
+  )
+
+if (nrow(intersection_table) == 0) {
+  stop("The 2010 and 2020 block-group layers did not intersect.")
+}
+
+# Assign each 2010 Smart Location block group to the 2020 block group
+# with which it has the largest area of overlap.
+overlap_crosswalk <- intersection_table |>
+  dplyr::group_by(GEOID10) |>
+  dplyr::slice_max(
+    order_by = overlap_area,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::select(
+    GEOID10,
+    GEOID,
+    overlap_area
+  )
+
+# Several 2010 block groups can map to the same 2020 block group.
+# Aggregate Smart Location variables so that there is exactly one row
+# per 2020 GEOID before joining to annual ACS data.
+smart_location_variables_2020 <- smart_location |>
+  sf::st_drop_geometry() |>
+  dplyr::select(
+    GEOID10,
+    D1B,
+    D2A_EPHHM,
+    D4A,
+    NatWalkInd
+  ) |>
+  dplyr::left_join(
+    overlap_crosswalk,
+    by = "GEOID10"
+  ) |>
+  dplyr::filter(!is.na(GEOID)) |>
+  dplyr::group_by(GEOID) |>
+  dplyr::summarise(
+    D1B = weighted.mean(
+      D1B,
+      w = overlap_area,
+      na.rm = TRUE
+    ),
+    D2A_EPHHM = weighted.mean(
+      D2A_EPHHM,
+      w = overlap_area,
+      na.rm = TRUE
+    ),
+    D4A = weighted.mean(
+      D4A,
+      w = overlap_area,
+      na.rm = TRUE
+    ),
+    NatWalkInd = weighted.mean(
+      NatWalkInd,
+      w = overlap_area,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    dplyr::across(
+      c(D1B, D2A_EPHHM, D4A, NatWalkInd),
+      ~ dplyr::na_if(.x, NaN)
+    )
+  )
+
+# Use the 2020 polygons for the final analysis geography.
+smart_location_2020 <- block_groups_2020 |>
+  dplyr::select(GEOID) |>
+  dplyr::inner_join(
+    smart_location_variables_2020,
+    by = "GEOID"
+  )
+
+duplicate_smart_geoids <- smart_location_2020 |>
+  sf::st_drop_geometry() |>
+  dplyr::count(GEOID) |>
+  dplyr::filter(n > 1)
+
+if (nrow(duplicate_smart_geoids) > 0) {
+  stop("Duplicate 2020 GEOIDs remain in smart_location_2020.")
+}
+
+message(
+  "2020 block groups with Smart Location data: ",
+  nrow(smart_location_2020)
+)
+```
+
+## Read annual rent-burden data
+
+```{r rent-burden}
+rent_burden_all <- purrr::map_dfr(
+  years,
+  read_rent_burden_year
+)
+
+duplicate_rent_rows <- rent_burden_all |>
+  dplyr::count(GEO_ID, Year) |>
+  dplyr::filter(n > 1)
+
+if (nrow(duplicate_rent_rows) > 0) {
+  stop("Duplicate GEO_ID–Year rows exist in the rent-burden files.")
+}
+```
+
+## Build one annual dataset
+
+```{r build-year}
+build_one_year <- function(year) {
+  philly_file <- file.path(
+    ev_dir,
+    sprintf("philadelphia_ev_%d.csv", year)
+  )
+
+  dmv_file <- file.path(
+    ev_dir,
+    sprintf("dmv_ev_%d.csv", year)
+  )
+
+  acs_file <- file.path(
+    acs_dir,
+    sprintf("%dACS-Data_DMV_Philly_Combined.csv", year)
+  )
+
+  assert_files_exist(
+    c(philly_file, dmv_file, acs_file)
+  )
+
+  ev_stations <- dplyr::bind_rows(
+    readr::read_csv(
+      philly_file,
+      show_col_types = FALSE
+    ),
+    readr::read_csv(
+      dmv_file,
+      show_col_types = FALSE
+    )
+  ) |>
+    dplyr::select(
+      dplyr::any_of(
+        c(
+          "EV.Network",
+          "Latitude",
+          "Longitude",
+          "Open.Date"
+        )
+      )
+    )
+
+  required_ev_columns <- c("Latitude", "Longitude")
+  missing_ev_columns <- setdiff(
+    required_ev_columns,
+    names(ev_stations)
+  )
+
+  if (length(missing_ev_columns) > 0) {
+    stop(
+      "EV files for ",
+      year,
+      " are missing: ",
+      paste(missing_ev_columns, collapse = ", ")
+    )
+  }
+
+  ev_stations <- ev_stations |>
+    dplyr::mutate(
+      Latitude = to_numeric_clean(Latitude),
+      Longitude = to_numeric_clean(Longitude)
+    ) |>
+    dplyr::filter(
+      !is.na(Latitude),
+      !is.na(Longitude),
+      dplyr::between(Latitude, -90, 90),
+      dplyr::between(Longitude, -180, 180)
+    ) |>
+    dplyr::distinct(
+      Latitude,
+      Longitude,
+      .keep_all = TRUE
+    )
+
+  if (nrow(ev_stations) == 0) {
+    stop("No valid EV station coordinates were found for ", year, ".")
+  }
+
+  ev_points <- sf::st_as_sf(
+    ev_stations,
+    coords = c("Longitude", "Latitude"),
+    crs = 4326,
+    remove = FALSE
+  )
+
+  # Do not explicitly select a geometry column by name.
+  # sf keeps the active geometry automatically.
+  block_group_base <- smart_location_2020 |>
+    dplyr::select(
+      GEOID,
+      D1B,
+      D2A_EPHHM,
+      D4A,
+      NatWalkInd
+    ) |>
+    sf::st_transform(4326)
+
+  block_group_exposure <- calculate_ev_exposure(
+    polygons = block_group_base,
+    points = ev_points,
+    distances_miles = c(0.5, 1, 2)
+  ) |>
+    sf::st_drop_geometry()
+
+  duplicate_exposure_rows <- block_group_exposure |>
+    dplyr::count(GEOID) |>
+    dplyr::filter(n > 1)
+
+  if (nrow(duplicate_exposure_rows) > 0) {
+    stop(
+      "Duplicate GEOIDs were created in EV exposure data for ",
+      year,
+      "."
+    )
+  }
+
+  acs <- readr::read_csv(
+    acs_file,
+    show_col_types = FALSE
+  ) |>
+    dplyr::mutate(
+      GEO_ID = as.character(GEO_ID)
+    )
+
+  duplicate_acs_rows <- acs |>
+    dplyr::count(GEO_ID) |>
+    dplyr::filter(n > 1)
+
+  if (nrow(duplicate_acs_rows) > 0) {
+    stop(
+      "The ACS file contains duplicate GEO_ID values for ",
+      year,
+      "."
+    )
+  }
+
+  annual_rent_burden <- rent_burden_all |>
+    dplyr::filter(Year == year) |>
+    dplyr::select(-Year)
+
+  annual_output <- acs |>
+    dplyr::left_join(
+      annual_rent_burden,
+      by = "GEO_ID"
+    ) |>
+    dplyr::inner_join(
+      block_group_exposure,
+      by = c("GEO_ID" = "GEOID")
+    ) |>
+    dplyr::rename(
+      PopDens = D1B,
+      EmployeeDiversity = D2A_EPHHM,
+      DistanceTransit = D4A,
+      Walkability = NatWalkInd
+    ) |>
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::any_of(
+          c(
+            "MedianRent",
+            "MedianHouseholdIncome",
+            "TotalStudents",
+            "HighSchoolDiploma",
+            "BachelorDegree",
+            "MasterDegreeAndPlus",
+            "TotalHH",
+            "OwnerHH",
+            "RenterHH",
+            "TotalPopulation",
+            "WhitePopulation",
+            "BlackPopulation",
+            "AsianPopulation",
+            "NonHispanicPopulation",
+            "HispanicPopulation",
+            "HouseholdUnderPoverty",
+            "HousingUnits",
+            "VacantUnits",
+            "PopDens",
+            "EmployeeDiversity",
+            "DistanceTransit",
+            "Walkability"
+          )
+        ),
+        to_numeric_clean
+      ),
+      black_per = dplyr::if_else(
+        TotalPopulation > 0,
+        100 * BlackPopulation / TotalPopulation,
+        NA_real_
+      ),
+      hispanic_per = dplyr::if_else(
+        TotalPopulation > 0,
+        100 * HispanicPopulation / TotalPopulation,
+        NA_real_
+      ),
+      white_per = dplyr::if_else(
+        TotalPopulation > 0,
+        100 * WhitePopulation / TotalPopulation,
+        NA_real_
+      ),
+      asian_per = dplyr::if_else(
+        TotalPopulation > 0,
+        100 * AsianPopulation / TotalPopulation,
+        NA_real_
+      ),
+      hs_per = dplyr::if_else(
+        TotalStudents > 0,
+        100 * HighSchoolDiploma / TotalStudents,
+        NA_real_
+      ),
+      bachelor_per = dplyr::if_else(
+        TotalStudents > 0,
+        100 * BachelorDegree / TotalStudents,
+        NA_real_
+      ),
+      master_per = dplyr::if_else(
+        TotalStudents > 0,
+        100 * MasterDegreeAndPlus / TotalStudents,
+        NA_real_
+      ),
+      renter_per = dplyr::if_else(
+        TotalHH > 0,
+        100 * RenterHH / TotalHH,
+        NA_real_
+      ),
+      poverty_hh_per = dplyr::if_else(
+        TotalHH > 0,
+        100 * HouseholdUnderPoverty / TotalHH,
+        NA_real_
+      ),
+      rent_afford = dplyr::if_else(
+        MedianRent > 0 &
+          MedianHouseholdIncome > 0,
+        MedianRent / MedianHouseholdIncome,
+        NA_real_
+      ),
+      Year = year
+    ) |>
+    dplyr::filter(
+      !is.na(MedianRent),
+      MedianRent > 0,
+      !is.na(MedianHouseholdIncome),
+      MedianHouseholdIncome > 0,
+      !is.na(PopDens),
+      PopDens >= 0,
+      !is.na(EmployeeDiversity),
+      EmployeeDiversity >= 0,
+      !is.na(DistanceTransit),
+      DistanceTransit >= 0,
+      !is.na(Walkability),
+      Walkability >= 0
+    )
+
+  duplicate_annual_rows <- annual_output |>
+    dplyr::count(GEO_ID) |>
+    dplyr::filter(n > 1)
+
+  if (nrow(duplicate_annual_rows) > 0) {
+    stop(
+      "Duplicate GEO_ID rows remain after joins for ",
+      year,
+      "."
+    )
+  }
+
+  annual_output
+}
+```
+
+## Build and save the complete panel
+
+```{r build-panel}
+panel_df <- purrr::map_dfr(
+  years,
+  build_one_year
+) |>
+  dplyr::arrange(
+    GEO_ID,
+    Year
+  )
+
+duplicate_rows <- panel_df |>
+  dplyr::count(
+    GEO_ID,
+    Year
+  ) |>
+  dplyr::filter(n > 1)
+
+if (nrow(duplicate_rows) > 0) {
+  print(duplicate_rows)
+
+  stop(
+    "Duplicate GEO_ID–Year records were created."
+  )
+}
+
+readr::write_csv(
+  panel_df,
+  output_file
+)
+
+message(
+  "Saved analysis panel to:\n",
+  output_file
+)
+
+message(
+  "Final number of rows: ",
+  nrow(panel_df)
+)
+```
+
+## Quality-control summary
+
+```{r quality-control}
+panel_summary <- panel_df |>
+  dplyr::group_by(Year) |>
+  dplyr::summarise(
+    n_block_groups = dplyr::n(),
+    share_within_0_5mi = mean(
+      WithinBuffer_0_5mi,
+      na.rm = TRUE
+    ),
+    share_within_1mi = mean(
+      WithinBuffer_1mi,
+      na.rm = TRUE
+    ),
+    share_within_2mi = mean(
+      WithinBuffer_2mi,
+      na.rm = TRUE
+    ),
+    missing_rent_burden_30p = mean(
+      is.na(rent_burden_30p)
+    ),
+    missing_rent_burden_50p = mean(
+      is.na(rent_burden_50p)
+    ),
+    .groups = "drop"
+  )
+
+panel_summary
+```
+
+## Session information
+
+```{r session-information}
+sessionInfo()
+```

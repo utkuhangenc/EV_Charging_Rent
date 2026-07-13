@@ -1,0 +1,315 @@
+---
+title: "03 — Two-Way Fixed-Effects Panel Models"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+library(plm)
+library(dplyr)
+library(purrr)
+library(lmtest)
+library(sandwich)
+library(tibble)
+library(tidyr)
+library(readr)
+library(stringr)
+
+panel_df <- read_csv(
+  here("data", "processed", "analysis_panel_2017_2023.csv"),
+  show_col_types = FALSE
+)
+
+distance_tags <- c("0_5mi", "1mi", "2mi")
+outcomes <- c(
+  "rent_afford",
+  "rent_burden_30p",
+  "rent_burden_50p"
+)
+
+required_columns <- c(
+  "GEO_ID", "Year", outcomes, "poverty_hh_per",
+  paste0("WithinBuffer_", distance_tags),
+  paste0("PointCount_", distance_tags)
+)
+
+missing_columns <- setdiff(required_columns, names(panel_df))
+if (length(missing_columns) > 0) {
+  stop(
+    "Missing required columns: ",
+    paste(missing_columns, collapse = ", ")
+  )
+}
+```
+
+## Prepare the balanced panel and EV-exposure transformations
+
+```{r prepare-panel}
+panel_df <- panel_df |>
+  transmute(
+    across(everything()),
+    GEO_ID = as.character(GEO_ID),
+    cbg_id = GEO_ID,
+    Year = as.integer(Year),
+    MedianRent = suppressWarnings(as.numeric(MedianRent)),
+    MedianHouseholdIncome =
+      suppressWarnings(as.numeric(MedianHouseholdIncome)),
+    rent_afford = if_else(
+      !is.na(rent_afford),
+      rent_afford,
+      if_else(
+        MedianRent > 0 & MedianHouseholdIncome > 0,
+        MedianRent / MedianHouseholdIncome,
+        NA_real_
+      )
+    )
+  ) |>
+  distinct(cbg_id, Year, .keep_all = TRUE)
+
+balanced_ids <- panel_df |>
+  count(cbg_id, name = "n_years") |>
+  filter(n_years == length(2017:2023)) |>
+  pull(cbg_id)
+
+panel_df <- panel_df |>
+  filter(cbg_id %in% balanced_ids) |>
+  arrange(cbg_id, Year) |>
+  group_by(cbg_id) |>
+  mutate(
+    across(
+      all_of(paste0("PointCount_", distance_tags)),
+      ~ suppressWarnings(as.numeric(.x))
+    ),
+    across(
+      all_of(paste0("WithinBuffer_", distance_tags)),
+      ~ suppressWarnings(as.numeric(.x))
+    ),
+    across(
+      all_of(paste0("PointCount_", distance_tags)),
+      log1p,
+      .names = "log{.col}"
+    ),
+    across(
+      all_of(paste0("PointCount_", distance_tags)),
+      ~ .x - lag(.x),
+      .names = "d{.col}"
+    )
+  ) |>
+  mutate(
+    across(
+      starts_with("dPointCount_"),
+      ~ pmax(.x, 0),
+      .names = "newAdds_{sub('^dPointCount_', '', .col)}"
+    ),
+    across(
+      starts_with("dPointCount_"),
+      ~ log1p(pmax(.x, 0)),
+      .names = "logNewAdds_{sub('^dPointCount_', '', .col)}"
+    )
+  ) |>
+  mutate(
+    across(
+      matches(
+        "^(WithinBuffer|PointCount|dPointCount|logPointCount|logNewAdds)_"
+      ),
+      list(
+        lead2 = ~ dplyr::lead(.x, 2),
+        lag2 = ~ dplyr::lag(.x, 2)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) |>
+  ungroup()
+
+pdata <- pdata.frame(
+  panel_df,
+  index = c("cbg_id", "Year")
+)
+
+clustered_vcov <- function(model) {
+  vcovHC(
+    model,
+    type = "HC1",
+    method = "arellano",
+    cluster = "group"
+  )
+}
+```
+
+## Model runner
+
+```{r model-runner}
+extract_ev_terms <- function(
+    coefficient_test,
+    ev_terms,
+    outcome,
+    model_id,
+    ev_base,
+    include_income) {
+
+  if (is.null(coefficient_test) || nrow(coefficient_test) == 0) {
+    return(tibble(
+      outcome = outcome,
+      model_id = model_id,
+      ev_base = ev_base,
+      include_income = include_income,
+      term = ev_terms,
+      estimate = NA_real_,
+      std_error = NA_real_,
+      p_value = NA_real_
+    ))
+  }
+
+  coefficient_table <- tibble(
+    term = rownames(coefficient_test),
+    estimate = coefficient_test[, 1],
+    std_error = coefficient_test[, 2],
+    p_value = coefficient_test[, 4]
+  )
+
+  tibble(term = ev_terms) |>
+    left_join(coefficient_table, by = "term") |>
+    mutate(
+      outcome = outcome,
+      model_id = model_id,
+      ev_base = ev_base,
+      include_income = include_income
+    ) |>
+    select(
+      outcome, model_id, ev_base, include_income,
+      term, estimate, std_error, p_value
+    )
+}
+
+run_twfe_model <- function(outcome, ev_base, include_income) {
+  controls <- c(
+    "TotalPopulation",
+    "black_per", "hispanic_per", "asian_per",
+    "hs_per", "bachelor_per", "master_per",
+    "renter_per", "poverty_hh_per"
+  )
+
+  if (include_income) {
+    controls <- c(controls, "MedianHouseholdIncome")
+  }
+
+  ev_terms <- c(
+    paste0(ev_base, "_lead2"),
+    ev_base,
+    paste0(ev_base, "_lag2")
+  )
+
+  formula <- reformulate(
+    c(ev_terms, controls),
+    response = outcome
+  )
+
+  model_id <- paste(
+    ev_base,
+    ifelse(include_income, "withIncome", "noIncome"),
+    outcome,
+    sep = "__"
+  )
+
+  model <- tryCatch(
+    plm(
+      formula,
+      data = pdata,
+      model = "within",
+      effect = "twoways"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(model)) {
+    return(
+      extract_ev_terms(
+        NULL, ev_terms, outcome, model_id,
+        ev_base, include_income
+      )
+    )
+  }
+
+  coefficient_test <- tryCatch(
+    coeftest(model, vcov. = clustered_vcov(model)),
+    error = function(e) NULL
+  )
+
+  extract_ev_terms(
+    coefficient_test,
+    ev_terms,
+    outcome,
+    model_id,
+    ev_base,
+    include_income
+  )
+}
+```
+
+## Run the model grid
+
+```{r run-grid}
+ev_variables <- c(
+  paste0("WithinBuffer_", distance_tags),
+  paste0("PointCount_", distance_tags),
+  paste0("dPointCount_", distance_tags),
+  paste0("logPointCount_", distance_tags),
+  paste0("logNewAdds_", distance_tags)
+)
+
+model_grid <- expand_grid(
+  outcome = outcomes,
+  ev_base = ev_variables,
+  include_income = c(FALSE, TRUE)
+)
+
+twfe_results <- pmap_dfr(
+  model_grid,
+  run_twfe_model
+) |>
+  mutate(
+    timing = case_when(
+      str_ends(term, "_lead2") ~ "Lead (t+2)",
+      str_ends(term, "_lag2") ~ "Lag (t-2)",
+      TRUE ~ "Current"
+    ),
+    significant_05 = !is.na(p_value) & p_value < 0.05,
+    conf_low = estimate - 1.96 * std_error,
+    conf_high = estimate + 1.96 * std_error
+  )
+
+write_csv(
+  twfe_results,
+  here("results", "tables", "twfe_full_results.csv")
+)
+```
+
+## Export compact timing and significant-results tables
+
+```{r export-tables}
+timing_wide <- twfe_results |>
+  select(
+    outcome, ev_base, include_income, timing,
+    estimate, std_error, p_value
+  ) |>
+  pivot_wider(
+    names_from = timing,
+    values_from = c(estimate, std_error, p_value)
+  )
+
+significant_results <- twfe_results |>
+  filter(significant_05) |>
+  arrange(outcome, ev_base, include_income, timing)
+
+write_csv(
+  timing_wide,
+  here("results", "tables", "twfe_timing_results_wide.csv")
+)
+write_csv(
+  significant_results,
+  here("results", "tables", "twfe_significant_results.csv")
+)
+
+twfe_results |>
+  count(outcome, timing, significant_05)
+```

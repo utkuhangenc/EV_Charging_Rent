@@ -1,0 +1,226 @@
+---
+title: "04 — Manuscript Tables and Figures"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+
+figure_dir <- here("results", "figures")
+table_dir <- here("results", "tables")
+```
+
+## Compare siting-model performance
+
+```{r siting-performance}
+siting_performance <- read_csv(
+  file.path(table_dir, "siting_model_performance.csv"),
+  show_col_types = FALSE
+)
+
+performance_long <- siting_performance |>
+  select(
+    Year, model, auc, accuracy,
+    sensitivity, false_positive_rate, precision
+  ) |>
+  pivot_longer(
+    cols = -c(Year, model),
+    names_to = "metric",
+    values_to = "value"
+  ) |>
+  mutate(
+    metric = recode(
+      metric,
+      auc = "AUC",
+      accuracy = "Accuracy",
+      sensitivity = "True-positive rate",
+      false_positive_rate = "False-positive rate",
+      precision = "Precision"
+    )
+  )
+
+performance_plot <- ggplot(
+  performance_long,
+  aes(x = Year, y = value, group = model, linetype = model)
+) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ metric, scales = "free_y") +
+  scale_x_continuous(breaks = 2017:2023) +
+  labs(
+    x = NULL,
+    y = "Performance",
+    linetype = "Model"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+ggsave(
+  file.path(figure_dir, "siting_model_performance.png"),
+  performance_plot,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+performance_plot
+```
+
+## Summarize random-forest variable importance
+
+```{r rf-importance}
+rf_importance <- read_csv(
+  file.path(table_dir, "random_forest_importance.csv"),
+  show_col_types = FALSE
+)
+
+rf_importance_summary <- rf_importance |>
+  group_by(Year) |>
+  mutate(
+    normalized_importance =
+      importance / max(importance, na.rm = TRUE),
+    annual_rank = min_rank(desc(importance))
+  ) |>
+  ungroup() |>
+  group_by(variable) |>
+  summarise(
+    mean_normalized_importance =
+      mean(normalized_importance, na.rm = TRUE),
+    mean_rank = mean(annual_rank, na.rm = TRUE),
+    years_in_top_10 = sum(annual_rank <= 10, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(mean_rank)
+
+write_csv(
+  rf_importance_summary,
+  file.path(table_dir, "random_forest_importance_summary.csv")
+)
+
+rf_importance_summary
+```
+
+## TWFE lead/current/lag coefficient plot
+
+Edit the three selections below to reproduce the manuscript figure of
+interest.
+
+```{r twfe-plot}
+selected_outcome <- "rent_burden_30p"
+selected_ev_variable <- "PointCount_1mi"
+selected_income_specification <- TRUE
+
+twfe_results <- read_csv(
+  file.path(table_dir, "twfe_full_results.csv"),
+  show_col_types = FALSE
+)
+
+plot_data <- twfe_results |>
+  filter(
+    outcome == selected_outcome,
+    ev_base == selected_ev_variable,
+    include_income == selected_income_specification
+  ) |>
+  mutate(
+    timing = factor(
+      timing,
+      levels = c("Lead (t+2)", "Current", "Lag (t-2)")
+    )
+  )
+
+if (nrow(plot_data) == 0) {
+  stop("The selected TWFE specification was not found.")
+}
+
+timing_plot <- ggplot(
+  plot_data,
+  aes(x = timing, y = estimate)
+) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_errorbar(
+    aes(ymin = conf_low, ymax = conf_high),
+    width = 0.12
+  ) +
+  geom_point(size = 2.5) +
+  labs(
+    x = NULL,
+    y = "Coefficient estimate",
+    title = paste(
+      selected_ev_variable,
+      "and",
+      selected_outcome
+    ),
+    subtitle = "Two-way fixed effects; 95% confidence intervals"
+  ) +
+  theme_minimal(base_size = 11)
+
+ggsave(
+  file.path(
+    figure_dir,
+    paste0(
+      "twfe_",
+      selected_outcome,
+      "_",
+      selected_ev_variable,
+      ".png"
+    )
+  ),
+  timing_plot,
+  width = 6.5,
+  height = 4.5,
+  dpi = 300
+)
+
+timing_plot
+```
+
+## Current-effect robustness plot
+
+```{r robustness-plot}
+current_effects <- twfe_results |>
+  filter(
+    outcome == selected_outcome,
+    timing == "Current",
+    include_income == selected_income_specification
+  ) |>
+  mutate(
+    ev_base = fct_reorder(ev_base, estimate)
+  )
+
+robustness_plot <- ggplot(
+  current_effects,
+  aes(x = estimate, y = ev_base)
+) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_errorbarh(
+    aes(xmin = conf_low, xmax = conf_high),
+    height = 0.15
+  ) +
+  geom_point(size = 2) +
+  labs(
+    x = "Contemporaneous coefficient estimate",
+    y = NULL,
+    title = selected_outcome,
+    subtitle = "Alternative EV exposure definitions and distances"
+  ) +
+  theme_minimal(base_size = 11)
+
+ggsave(
+  file.path(
+    figure_dir,
+    paste0("twfe_robustness_", selected_outcome, ".png")
+  ),
+  robustness_plot,
+  width = 8,
+  height = 7,
+  dpi = 300
+)
+
+robustness_plot
+```
