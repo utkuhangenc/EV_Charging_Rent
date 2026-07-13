@@ -62,7 +62,7 @@ renv::init()
 renv::snapshot()
 ```
 
-## Datasets required to reproduce the study
+## Datasets required to reproduce the study, they can be accessed using the doi: 10.5281/zenodo.21346452
 
 ### 1. Annual ACS analysis files, 2017–2023
 
