@@ -1,0 +1,17 @@
+study_metro,Year,N,N_rent30,N_rent50,share_1mi,median_count_1mi
+Philadelphia-Camden-Wilmington,2017,2722,2722,2722,0.45260837619397504,0.0
+Philadelphia-Camden-Wilmington,2018,2724,2724,2724,0.4563142437591777,0.0
+Philadelphia-Camden-Wilmington,2019,2685,2685,2685,0.5385474860335195,1.0
+Philadelphia-Camden-Wilmington,2020,2254,2254,2254,0.5820763087843833,1.0
+Philadelphia-Camden-Wilmington,2021,2201,2201,2201,0.659700136301681,1.0
+Philadelphia-Camden-Wilmington,2022,2159,2159,2159,0.7035664659564613,1.0
+Philadelphia-Camden-Wilmington,2023,2085,2085,2085,0.7577937649880095,2.0
+Philadelphia-Camden-Wilmington,2024,2055,2055,2055,0.7990267639902676,2.0
+Washington-Arlington-Alexandria,2017,2397,2397,2397,0.670421360033375,1.0
+Washington-Arlington-Alexandria,2018,2385,2385,2385,0.7190775681341719,2.0
+Washington-Arlington-Alexandria,2019,2368,2368,2368,0.765625,2.0
+Washington-Arlington-Alexandria,2020,2106,2106,2106,0.8247863247863247,3.0
+Washington-Arlington-Alexandria,2021,2071,2071,2071,0.8855625301786576,4.0
+Washington-Arlington-Alexandria,2022,2050,2050,2050,0.9336585365853659,5.0
+Washington-Arlington-Alexandria,2023,2033,2033,2033,0.9508116084604034,7.0
+Washington-Arlington-Alexandria,2024,2033,2033,2033,0.940973930152484,7.0

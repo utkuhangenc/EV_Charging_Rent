@@ -1,0 +1,10 @@
+Outcome,Timing,N_planned,N_tested,N_significant,Percent_of_tested,Expected_n
+rent_afford,Lead 2y,270,270,8,2.962962962962963,270
+rent_afford,Current,270,270,14,5.185185185185185,270
+rent_afford,Lag 2y,270,270,19,7.037037037037037,270
+rent_burden_30p,Lead 2y,270,270,17,6.296296296296297,270
+rent_burden_30p,Current,270,270,14,5.185185185185185,270
+rent_burden_30p,Lag 2y,270,270,6,2.2222222222222223,270
+rent_burden_50p,Lead 2y,270,270,19,7.037037037037037,270
+rent_burden_50p,Current,270,270,28,10.37037037037037,270
+rent_burden_50p,Lag 2y,270,270,4,1.4814814814814814,270

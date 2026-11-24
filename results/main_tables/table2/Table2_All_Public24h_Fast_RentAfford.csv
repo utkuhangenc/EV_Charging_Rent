@@ -1,0 +1,10 @@
+Scope,Charging category,Proximity,Density
+Pooled,All chargers,-2.941*,0.148***
+Pooled,Public 24h,-2.558*,0.141**
+Pooled,Public 24h DC fast,1.355,1.380*
+DMV,All chargers,-5.556**,0.089*
+DMV,Public 24h,-4.227**,0.090*
+DMV,Public 24h DC fast,1.212,1.316†
+Philadelphia,All chargers,-1.819,0.357*
+Philadelphia,Public 24h,-1.860,0.355†
+Philadelphia,Public 24h DC fast,0.125,0.610

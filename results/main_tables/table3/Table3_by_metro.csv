@@ -1,0 +1,28 @@
+Outcome,Scope,Timing,N_planned,N_tested,N_significant,Percent_of_tested
+rent_afford,Pooled,Lead 2y,90,90,5,5.555555555555555
+rent_afford,Pooled,Current,90,90,4,4.444444444444445
+rent_afford,Pooled,Lag 2y,90,90,6,6.666666666666667
+rent_burden_30p,Pooled,Lead 2y,90,90,5,5.555555555555555
+rent_burden_30p,Pooled,Current,90,90,0,0.0
+rent_burden_30p,Pooled,Lag 2y,90,90,2,2.2222222222222223
+rent_burden_50p,Pooled,Lead 2y,90,90,9,10.0
+rent_burden_50p,Pooled,Current,90,90,7,7.777777777777778
+rent_burden_50p,Pooled,Lag 2y,90,90,2,2.2222222222222223
+rent_afford,DMV,Lead 2y,90,90,1,1.1111111111111112
+rent_afford,DMV,Current,90,90,10,11.11111111111111
+rent_afford,DMV,Lag 2y,90,90,5,5.555555555555555
+rent_burden_30p,DMV,Lead 2y,90,90,6,6.666666666666667
+rent_burden_30p,DMV,Current,90,90,5,5.555555555555555
+rent_burden_30p,DMV,Lag 2y,90,90,4,4.444444444444445
+rent_burden_50p,DMV,Lead 2y,90,90,10,11.11111111111111
+rent_burden_50p,DMV,Current,90,90,15,16.666666666666668
+rent_burden_50p,DMV,Lag 2y,90,90,2,2.2222222222222223
+rent_afford,Philadelphia,Lead 2y,90,90,2,2.2222222222222223
+rent_afford,Philadelphia,Current,90,90,0,0.0
+rent_afford,Philadelphia,Lag 2y,90,90,8,8.88888888888889
+rent_burden_30p,Philadelphia,Lead 2y,90,90,6,6.666666666666667
+rent_burden_30p,Philadelphia,Current,90,90,9,10.0
+rent_burden_30p,Philadelphia,Lag 2y,90,90,0,0.0
+rent_burden_50p,Philadelphia,Lead 2y,90,90,0,0.0
+rent_burden_50p,Philadelphia,Current,90,90,6,6.666666666666667
+rent_burden_50p,Philadelphia,Lag 2y,90,90,0,0.0

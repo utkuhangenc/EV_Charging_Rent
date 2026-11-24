@@ -1,0 +1,14 @@
+,Pooled,Pooled,DMV,DMV,Philadelphia,Philadelphia
+,Proximity,Density,Proximity,Density,Proximity,Density
+Variable,,,,,,
+Total population,-2.7039e-07,-2.6906e-07,1.6927e-07,1.6947e-07,-6.5797e-07*,-6.6062e-07*
+Percent Black residents,-1.1154e-05,-1.0704e-05,-1.8284e-05*,-1.7765e-05*,-2.94e-06,-2.267e-06
+Percent Hispanic residents,-2.7479e-06,-2.1824e-06,-1.4613e-05·,-1.3791e-05·,7.2332e-06,8.1433e-06
+Percent Asian residents,2.4041e-06,2.5946e-06,2.3568e-06,2.7234e-06,-3.9298e-06,-3.6345e-06
+Percent with high school degree,1.6037e-05,1.6281e-05,-4.7559e-06,-4.8462e-06,2.5567e-05·,2.6104e-05·
+Percent with bachelor's degree,-5.6226e-07,-2.6487e-07,-3.0784e-06,-3.5253e-06,3.0426e-06,3.5697e-06
+Percent with master's degree,3.3066e-05***,3.3744e-05***,1.2632e-05,1.2594e-05,5.4514e-05***,5.5343e-05***
+EV charger within 1 mile (yes/no),-0.00025577*,—,-0.00042269**,—,-0.00018603,—
+Number of EV chargers within 1 mile,—,1.4143e-05**,—,8.9955e-06*,—,3.5545e-05·
+Median household income,-1.4224e-07***,-1.4266e-07***,-1.2743e-07***,-1.2766e-07***,-1.6961e-07***,-1.7039e-07***
+Percent renters,3.6688e-05***,3.6555e-05***,2.7266e-05***,2.7609e-05***,4.2183e-05***,4.1583e-05***
