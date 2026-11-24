@@ -1,25 +1,37 @@
-# RStudio
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*secret*
+*credentials*
+
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.pytest_cache/
+
+# R / RStudio
 .Rhistory
 .RData
 .Ruserdata
 .Rproj.user/
-
-# Rendered R Markdown files
-code/*.html
-code/*_files/
-code/*_cache/
-
-# renv local packages
+*_cache/
+*_files/
 renv/library/
 renv/staging/
 
-# Large raw data
-data/raw/smart_location/
-data/raw/census_boundaries/
+# Large input and transient outputs (use Zenodo + download instructions)
+data/raw/
+data/intermediate/
+data/processed/
+*.gpkg-journal
+*.log
 
-# Optional: ignore all raw data
-# data/raw/
-
-# System files
+# HPC/local/system
 .DS_Store
 Thumbs.db
+.slurm/
+slurm-*.out
