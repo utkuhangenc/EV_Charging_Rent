@@ -35,3 +35,13 @@ data/processed/
 Thumbs.db
 .slurm/
 slurm-*.out
+
+# Zenodo downloads and generated model inputs should not be staged in GitHub.
+# These extend the earlier data/raw, data/intermediate and data/processed rules.
+data/output/
+data/reference/
+data/shapefiles/
+data/input/
+data/*.zip
+*_CANDIDATE.zip
+EVCS_2017_2024_Zenodo_Data*.zip
